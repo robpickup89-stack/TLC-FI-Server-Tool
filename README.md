@@ -9,6 +9,7 @@ This WinForms application acts as a lightweight TLC-Fi server-side test tool. It
 - View connected clients and send messages to a selected client.
 - Log inbound/outbound traffic with optional hex payload display.
 - Auto-echo mode for basic protocol handshake verification.
+- Auto-respond to TLC-FI version check requests (TLC_CERT, TLCFA, TLCFA_USERS).
 
 ## References
 - TLC-FI protocol overview (iVRI2 RIS-FI v1.0): https://www.ivera.nl/wp-content/uploads/2017/06/iVRI2_del_1b_IDD_RIS-FI_v1.0.pdf

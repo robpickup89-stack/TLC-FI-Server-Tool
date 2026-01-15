@@ -20,6 +20,7 @@ public sealed class MainForm : Form
     private readonly ListBox _clientsListBox = new();
     private readonly CheckBox _autoEchoCheckBox = new();
     private readonly CheckBox _hexDisplayCheckBox = new();
+    private readonly CheckBox _autoResponseCheckBox = new();
     private readonly Label _statusLabel = new();
 
     private readonly ConcurrentDictionary<int, TcpClient> _clients = new();
@@ -112,6 +113,12 @@ public sealed class MainForm : Form
         _hexDisplayCheckBox.Width = 160;
         _hexDisplayCheckBox.Checked = true;
 
+        _autoResponseCheckBox.Text = "Auto-respond to TLC-FI version checks";
+        _autoResponseCheckBox.Left = 400;
+        _autoResponseCheckBox.Top = 654;
+        _autoResponseCheckBox.Width = 320;
+        _autoResponseCheckBox.Checked = true;
+
         Controls.Add(portLabel);
         Controls.Add(_portTextBox);
         Controls.Add(_startButton);
@@ -124,6 +131,7 @@ public sealed class MainForm : Form
         Controls.Add(_sendButton);
         Controls.Add(_autoEchoCheckBox);
         Controls.Add(_hexDisplayCheckBox);
+        Controls.Add(_autoResponseCheckBox);
     }
 
     private void StartServer()
@@ -248,7 +256,8 @@ public sealed class MainForm : Form
 
                 LogMessage(formatted);
 
-                if (_autoEchoCheckBox.Checked)
+                var autoResponded = await TrySendAutoResponseAsync(clientId, stream, payload, token);
+                if (_autoEchoCheckBox.Checked && !autoResponded)
                 {
                     await stream.WriteAsync(buffer.AsMemory(0, bytesRead), token);
                     LogMessage($"Echoed {bytesRead} bytes to #{clientId}.");
@@ -272,6 +281,29 @@ public sealed class MainForm : Form
             Invoke(() => RemoveClientFromList(clientId));
             LogMessage($"Client #{clientId} disconnected.");
         }
+    }
+
+    private async Task<bool> TrySendAutoResponseAsync(int clientId, NetworkStream stream, string payload, CancellationToken token)
+    {
+        if (!_autoResponseCheckBox.Checked)
+        {
+            return false;
+        }
+
+        foreach (var (key, response) in TlcFiPayloads.Responses)
+        {
+            if (!payload.Contains(key, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var data = Encoding.UTF8.GetBytes(response);
+            await stream.WriteAsync(data, token);
+            LogMessage($"Auto-response for {key} sent to #{clientId} ({data.Length} bytes).");
+            return true;
+        }
+
+        return false;
     }
 
     private void SendToSelectedClient()

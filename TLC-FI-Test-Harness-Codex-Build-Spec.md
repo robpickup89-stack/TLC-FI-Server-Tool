@@ -64,49 +64,91 @@ Therefore:
 - Many roadside / ITS systems use PKI and mTLS.
 - TLC-FI doc points security to underlying mechanisms rather than embedding credentials in messages.
 
-### 3.2 Auth Mode B (Fallback / Lab): JSON-RPC Authenticate handshake (username/password)
+### 3.2 Auth Mode B (Fallback / Lab): JSON-RPC Register handshake (username/password)
 
 This is for depot / quick vendor trials when certs aren’t available yet.
 
 Important: This handshake happens **before** sending TLC-FI Subscribe/UpdateState etc.
 
-**Method: Authenticate** (Implementation method; not TLC-FI)
+#### 3.2.1 Registration handshake (MANDATORY)
 
-Request:
+Before any TLC-FI methods (Subscribe, ReadMeta, UpdateState, NotifyEvent) are accepted, the client must successfully call:
+
+**JSON-RPC method: Register**
+
+Client → Server request:
 
 ```json
 {
-  "jsonrpc":"2.0",
-  "id":1,
-  "method":"Authenticate",
-  "params":{
-    "username":"Jason",
-    "password":"<value>",
-    "requestedApplicationType":"Control"
+  "method": "Register",
+  "params": {
+    "username": "CHAM",
+    "password": "CHAM2",
+    "type": 1,
+    "version": 1,
+    "revision": 0,
+    "uri": "127.0.0.1"
+  },
+  "id": "msgid12",
+  "jsonrpc": "2.0"
+}
+```
+
+Field meanings (implement exactly):
+- `username` (string) – required
+- `password` (string) – required
+- `type` (int) – required
+  - `0` = Consumer
+  - `1` = Provider
+  - `2` = Control
+- `version` (int) – required (store and log; enforce if needed)
+- `revision` (int) – required (store and log; enforce if needed)
+- `uri` (string) – required (store; may be used for audit/debug)
+
+#### 3.2.2 Registration failure
+
+Server responds with JSON-RPC error:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "msgid12",
+  "error": { "code": 1, "message": "Incorrect credentials" }
+}
+```
+
+Rules:
+- On any auth failure:
+  - Return the above error shape
+  - Keep socket connected OR close it (configurable; default: keep connected to allow retry)
+  - Do not allow any TLC-FI method calls until registered successfully.
+- If an unregistered client calls TLC-FI methods:
+  - Respond with JSON-RPC error (example):
+    - `{ "jsonrpc":"2.0", "id":<same>, "error":{"code":2,"message":"Not registered"} }`
+  - Keep the code configurable; some systems are picky.
+
+#### 3.2.3 Registration success (define result)
+
+Success payload:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "msgid12",
+  "result": {
+    "accepted": true,
+    "sessionid": "S1",
+    "type": 1,
+    "version": 1,
+    "revision": 0
   }
 }
 ```
 
-Response:
-
-```json
-{
-  "jsonrpc":"2.0",
-  "id":1,
-  "result":{
-    "authenticated":true,
-    "token":"<opaque token>",
-    "expiresInSeconds":3600
-  }
-}
-```
-
-After successful `Authenticate`:
-- Client must include a token in a lightweight wrapper for subsequent requests, using either:
-  - `params.authToken` (recommended), or
-  - a per-connection session context (server binds token to socket; no need to send each time)
-
-Recommended approach: **bind auth to the socket session**; do not require token on every call (simpler for tools).
+Notes:
+- Keep `accepted` and `sessionid` stable across reconnects only if you want; otherwise a new session per connection is fine.
+- Also create/track an internal Session object for the connection:
+  - SessionId, ApplicationType, Username, ClientEndpoint, LastSeen, Version, Revision, etc.
 
 ## 4) Session / ApplicationType (TLC-FI-aligned)
 
@@ -115,9 +157,9 @@ TLC-FI models application sessions as Session objects (e.g., ControlApplication 
 ### 4.1 Application Types
 
 Enum:
-- Provider
-- Consumer
-- Control
+- `0` = Consumer
+- `1` = Provider
+- `2` = Control
 
 ### 4.2 Session object tracking
 
@@ -125,6 +167,7 @@ For each connected client on server:
 - `sessionId` (server-generated)
 - `username` (if password auth) **OR** `certSubject/Thumbprint` (if mTLS)
 - `applicationType` (declared/negotiated)
+- `version`, `revision`, `uri` (from Register, stored for audit/debug)
 - `controlState` etc. (if ControlApplication)
 
 ### 4.3 Realistic control state logic
@@ -253,7 +296,10 @@ And must validate:
   - “Require client certificate” checkbox (server mode)
   - “Allow self-signed server cert” checkbox (client mode)
 - Username / Password fields (enabled only in password mode)
-- ApplicationType dropdown (Provider/Consumer/Control)
+- ApplicationType dropdown (Consumer/Provider/Control, mapped to 0/1/2)
+- Version numeric input (default 1)
+- Revision numeric input (default 0)
+- URI textbox (default `127.0.0.1` or local endpoint)
 - Start/Stop or Connect/Disconnect button
 - Status indicators:
   - server running / client connected
@@ -307,7 +353,7 @@ On accept:
    - Else: plain `NetworkStream`
 2. Perform authentication:
    - TLS mode: validate client certificate (if required)
-   - Password mode: require `Authenticate` JSON-RPC before any TLC-FI method
+   - Password mode: require `Register` JSON-RPC before any TLC-FI method
 3. Create server-side `ClientSession`
 4. Allow TLC-FI method processing
 
@@ -331,7 +377,7 @@ On accept:
 ### 11.1 Connection pipeline
 1. Connect TCP
 2. If TLS: `SslStream.AuthenticateAsClient`
-3. If password: send `Authenticate`
+3. If password: send `Register`
 4. After authenticated:
    - Optionally send ReadMeta + Subscribe-all (toggles)
 5. Handle incoming UpdateState/NotifyEvent and update UI
@@ -361,8 +407,8 @@ Example:
 ```json
 {
   "users": [
-    { "username": "Jason", "password": "<set_me>", "allowedApplicationTypes": ["Control"] },
-    { "username": "admin", "password": "<set_me>", "allowedApplicationTypes": ["Provider","Consumer","Control"] }
+    { "username": "Jason", "password": "<set_me>", "allowedTypes": [2] },
+    { "username": "admin", "password": "<set_me>", "allowedTypes": [0, 1, 2] }
   ]
 }
 ```
@@ -405,7 +451,8 @@ Scenario scripts.
 - `Transport/*` (NdjsonFramer, StreamReadLoop, StreamWriteQueue)
 - `Auth/*`
   - `TlsAuth.cs` (cert validation)
-  - `PasswordAuth.cs` (Authenticate handler, users.json)
+  - `PasswordAuth.cs` (users.json)
+  - `RegistrationHandler.cs` (Register handler)
 - `JsonRpc/*` (dispatcher, message types, errors)
 - `Server/*` (ServerHost, ClientConnection, SubscriptionManager)
 - `Client/*` (ClientHost, AutoReconnect, Protocol helpers)
@@ -427,7 +474,7 @@ Scenario scripts.
 Because vendor implementations vary, this tool must be pluggable:
 - Auth mode is configurable per profile
 - Password auth supports:
-  - Authenticate method (JSON-RPC)
+- Register method (JSON-RPC)
   - Optional “pre-RPC handshake line” (easy to add later)
 - TLS supports:
   - require client cert ON/OFF

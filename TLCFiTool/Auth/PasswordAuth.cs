@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using TLCFiTool.Models;
 
 namespace TLCFiTool.Auth;
@@ -55,8 +56,11 @@ public sealed class PasswordAuth
 
     public sealed class UserRecord
     {
+        [JsonPropertyName("username")]
         public string Username { get; set; } = string.Empty;
+        [JsonPropertyName("password")]
         public string Password { get; set; } = string.Empty;
+        [JsonPropertyName("allowedTypes")]
         public List<ApplicationType> AllowedApplicationTypes { get; set; } = new();
 
         public static IEnumerable<UserRecord> DefaultUsers() => new[]

@@ -1,487 +1,430 @@
-# TLC-FI Test Harness (.NET 8 WinForms) — Codex Build Spec (Real-World Ready)
+# CODEX SPEC — TLC-FI Real-World Test Harness (.NET 8 WinForms)
 
-## 0) Goal
+## 1) Objective
 
-Build a single WinForms app that can run as:
+Build a single **.NET 8 WinForms** application that can operate as:
 
-1. **Server (TLC-FI Provider/Facilities Simulator)**
-   - Hosts a TCP listener on port 11501
-   - Authenticates clients (TLS mutual auth preferred; password fallback)
-   - Supports multiple concurrent clients
-   - Implements TLC-FI semantics for Detectors and Outputs (defaults 1..255)
-   - Supports Subscribe / UpdateState / NotifyEvent / ReadMeta
-   - Tracks Session objects + ApplicationType (Provider/Consumer/Control)
-2. **Client (ITS Application simulator)**
-   - Connects to server
-   - Authenticates using configured mode
-   - Acts as Provider, Consumer, or Control
-   - Allows interactive editing of DET/OUT and sending/receiving TLC-FI calls
-   - Has robust debug console + traffic monitor + replay
+### A) Client Mode (Real-world compatible)
 
-## 1) Assumptions and “Spec vs Implementation”
+- Connect to an existing TLC-FI endpoint on **TCP port 11501**
+- Perform **Register** authentication exactly as per captured traces
+- Perform **ReadMeta** discovery for object types **0..8**
+- Perform **Subscribe** to required objects
+- Receive **UpdateState** notifications and update the UI live
+- Support **Deregister**
 
-TLC-FI defines:
-- Objects (Detector, Output, Session / ControlApplication etc.)
-- Methods: Subscribe, UpdateState, NotifyEvent, ReadMeta
+### B) Server Mode (Simulator)
 
-TLC-FI does **not** define:
-- TCP framing
-- Port numbers
-- Exact auth handshake (delegated to underlying mechanisms / Generic Facilities Interface / security)
+- Host a TLC-FI endpoint (TCP port 11501)
+- Require client **Register** before allowing other methods
+- Implement **ReadMeta**, **Subscribe**, and server-pushed **UpdateState**
+- Expose editable object sets and defaults:
+  - Detectors default: **DET1..DET255** (type 4)
+  - Outputs default: **OUT1..OUT255** (type 6)
+- Names and indices can be changed in UI at runtime
+- Allow multiple concurrent clients
 
-Therefore:
-- We implement a real-world auth layer in front of TLC-FI methods.
-- After auth, all messages follow TLC-FI method semantics.
+Both modes must include:
 
-## 2) Network & Framing
+- Debug console
+- Raw JSON send/receive
+- Message trace (Tx/Rx list) + export
+- Profiles + persistence
 
-- Default port: 11501
-- Transport: TCP
-- Encoding: UTF-8
-- Framing: NDJSON (newline-delimited JSON objects)
-- Each JSON-RPC object is 1 line terminated by `\n`
-- Reader must support partial frames and multiple frames per read
+---
 
-## 3) Authentication Modes (Most likely + fallback)
+## 2) Transport & Framing
 
-### 3.1 Auth Mode A (Preferred / “Real-world”): TLS Mutual Authentication (mTLS)
+- TCP port: **11501** default (editable in UI)
+- UTF-8
+- **NDJSON framing**: each JSON object is terminated by `\n`
+- Reader must handle:
+  - partial frames
+  - multiple frames in one read
+  - very large messages (long `ids` arrays)
 
-**Server:**
-- Uses `SslStream` over `TcpClient` after accept
-- Requires a server certificate (PFX)
-- Requires client certificate (optional toggle; default **ON** in “Real-world” profile)
-- Validates client cert chain and (optionally) thumbprint allow-list
+---
 
-**Client:**
-- Loads client PFX cert
-- Validates server certificate (optional: allow self-signed in test profile)
+## 3) JSON-RPC Rules
 
-**Outcome:**
-- Once TLS is established and client cert is accepted, the client is “authenticated”.
-- The client still must declare `ApplicationType` via the Session object exchange (see Section 4).
+Support:
 
-**Why this is most likely:**
-- Many roadside / ITS systems use PKI and mTLS.
-- TLC-FI doc points security to underlying mechanisms rather than embedding credentials in messages.
+- Requests: `{"jsonrpc":"2.0","id":"msgid22","method":"X","params":{...}}`
+- Responses: `{"jsonrpc":"2.0","id":"msgid22","result":{...}}` or `error`
+- Notifications: `{"jsonrpc":"2.0","method":"UpdateState","params":{...}}`
 
-### 3.2 Auth Mode B (Fallback / Lab): JSON-RPC Register handshake (username/password)
+**Important:** `id` can be **string** (e.g., `"msgid22"`). Treat it as `string` or `JsonElement`.
 
-This is for depot / quick vendor trials when certs aren’t available yet.
+---
 
-Important: This handshake happens **before** sending TLC-FI Subscribe/UpdateState etc.
+## 4) Authentication / Session (REAL IMPLEMENTATION)
 
-#### 3.2.1 Registration handshake (MANDATORY)
+### 4.1 Register (mandatory before anything else)
 
-Before any TLC-FI methods (Subscribe, ReadMeta, UpdateState, NotifyEvent) are accepted, the client must successfully call:
-
-**JSON-RPC method: Register**
-
-Client → Server request:
+Client sends (exact shape):
 
 ```json
 {
-  "method": "Register",
-  "params": {
-    "username": "CHAM",
-    "password": "CHAM2",
-    "type": 1,
-    "version": 1,
-    "revision": 0,
-    "uri": "127.0.0.1"
+  "method":"Register",
+  "params":{
+    "username":"Chameleon",
+    "password":"CHAM2",
+    "type":1,
+    "version":{"major":1,"minor":1,"revision":0},
+    "uri":""
   },
-  "id": "msgid12",
-  "jsonrpc": "2.0"
+  "id":"msgid22",
+  "jsonrpc":"2.0"
 }
 ```
 
-Field meanings (implement exactly):
-- `username` (string) – required
-- `password` (string) – required
-- `type` (int) – required
-  - `0` = Consumer
-  - `1` = Provider
-  - `2` = Control
-- `version` (int) – required (store and log; enforce if needed)
-- `revision` (int) – required (store and log; enforce if needed)
-- `uri` (string) – required (store; may be used for audit/debug)
+Fields:
 
-#### 3.2.2 Registration failure
+- `username` string
+- `password` string
+- `type` int (application type)
+  - `0 = Consumer`
+  - `1 = Provider`
+  - `2 = Control`
+- `version` object `{major, minor, revision}` (ints)
+- `uri` string (can be empty)
 
-Server responds with JSON-RPC error:
+### 4.2 Register success response (exact shape)
+
+Server returns:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "msgid12",
-  "error": { "code": 1, "message": "Incorrect credentials" }
+  "jsonrpc":"2.0",
+  "id":"msgid22",
+  "result":{
+    "sessionid":"SWARCO_PT_ID9",
+    "facilities":{"type":1,"ids":["SWA_PT_0106"]},
+    "version":{"major":1,"minor":1,"revision":0}
+  }
+}
+```
+
+### 4.3 Register failure response (exact shape)
+
+```json
+{
+  "jsonrpc":"2.0",
+  "id":"msgid22",
+  "error":{"code":1,"message":"Incorrect credentials"}
 }
 ```
 
 Rules:
-- On any auth failure:
-  - Return the above error shape
-  - Keep socket connected OR close it (configurable; default: keep connected to allow retry)
-  - Do not allow any TLC-FI method calls until registered successfully.
-- If an unregistered client calls TLC-FI methods:
-  - Respond with JSON-RPC error (example):
-    - `{ "jsonrpc":"2.0", "id":<same>, "error":{"code":2,"message":"Not registered"} }`
-  - Keep the code configurable; some systems are picky.
 
-#### 3.2.3 Registration success (define result)
+- If a client is **not registered**, reject any other method with error:
+  - `code: 2, message: "Not registered"` (or configurable)
+- Never log passwords in plaintext.
 
-Success payload:
+### 4.4 Deregister
+
+Client sends:
+
+```json
+{"method":"Deregister","params":{"username":"Chameleon"},"id":"msgid40","jsonrpc":"2.0"}
+```
+
+Server behavior:
+
+- Return `{result:{deregistered:true}}` and/or close socket (configurable; default close).
+
+---
+
+## 5) Object Types (must support 0..8)
+
+Real-world traces use these types, so implement support for all:
+
+- Type **0**: Session
+- Type **1**: Facilities (TLCFacilities)
+- Type **2**: Intersection
+- Type **3**: SignalGroup
+- Type **4**: Detector
+- Type **5**: Input
+- Type **6**: Output
+- Type **7**: SpecialVehicleEvents (generator)
+- Type **8**: Variables
+
+**Client mode:** accept arbitrary IDs like `PBU_D_P5`, `UTC_O2`, `STREAM1`, etc.
+**Server mode:** can generate default DET/OUT sets (DET1..DET255, OUT1..OUT255) plus optional demo Intersection + Facilities.
+
+---
+
+## 6) ReadMeta (exact response shape)
+
+Request:
+
+```json
+{"method":"ReadMeta","params":{"type":4,"ids":["X","Y"]},"id":"msgid27","jsonrpc":"2.0"}
+```
+
+Response:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "msgid12",
-  "result": {
-    "accepted": true,
-    "sessionid": "S1",
-    "type": 1,
-    "version": 1,
-    "revision": 0
+  "jsonrpc":"2.0",
+  "id":"msgid27",
+  "result":{
+    "objects":{"type":4,"ids":["X","Y"]},
+    "meta":[{...},{...}],
+    "ticks":81876230
+  }
+}
+```
+
+Rules:
+
+- `objects.ids` order matches request order
+- `meta[]` aligns by index to ids
+- `ticks` must be present
+
+Implementation approach:
+
+- Store and display meta as JSON (use JsonDocument/JsonElement), with a key/value view.
+
+Meta schemas to support (based on trace):
+
+- Type 1 meta includes lists of intersections, signalgroups, detectors, inputs, outputs, variables, plus an `info` block.
+- Type 0 meta includes `{sessionid, type}`.
+- Type 2 meta includes lists of outputs/inputs/signalgroups/detectors plus `spvehgenerator`.
+- Type 3 meta includes `intersection`, `intergreen[]`, `timing[]`.
+- Type 4 meta includes `{id, generatesEvents}`.
+- Type 5 meta includes `{id}` (minimal).
+- Type 6 meta includes `{id, intersection}` (intersection can be null).
+- Type 7 meta includes `{id}`.
+- Type 8 meta includes `{id}`.
+
+---
+
+## 7) Subscribe (exact response shape)
+
+Request:
+
+```json
+{"method":"Subscribe","params":{"type":6,"ids":["UTC_O2","UTC_O3"]},"id":"msgid35","jsonrpc":"2.0"}
+```
+
+Response:
+
+```json
+{
+  "jsonrpc":"2.0",
+  "id":"msgid35",
+  "result":{
+    "objects":{"type":6,"ids":["UTC_O2","UTC_O3"]},
+    "data":[{"state":0,"faultstate":0,"stateticks":123},{"state":0,"faultstate":0,"stateticks":456}],
+    "ticks":81876490
   }
 }
 ```
 
 Notes:
-- Keep `accepted` and `sessionid` stable across reconnects only if you want; otherwise a new session per connection is fine.
-- Also create/track an internal Session object for the connection:
-  - SessionId, ApplicationType, Username, ClientEndpoint, LastSeen, Version, Revision, etc.
 
-## 4) Session / ApplicationType (TLC-FI-aligned)
+- Type 0 subscribe can return empty ids/data (seen in trace):
+  - `{"objects":{"type":0,"ids":[]},"data":[],"ticks":...}`
 
-TLC-FI models application sessions as Session objects (e.g., ControlApplication / ProviderApplication / ConsumerApplication). The tool must represent this, regardless of auth mode.
+---
 
-### 4.1 Application Types
+## 8) UpdateState notifications (server → client)
 
-Enum:
-- `0` = Consumer
-- `1` = Provider
-- `2` = Control
-
-### 4.2 Session object tracking
-
-For each connected client on server:
-- `sessionId` (server-generated)
-- `username` (if password auth) **OR** `certSubject/Thumbprint` (if mTLS)
-- `applicationType` (declared/negotiated)
-- `version`, `revision`, `uri` (from Register, stored for audit/debug)
-- `controlState` etc. (if ControlApplication)
-
-### 4.3 Realistic control state logic
-
-Implement control states (minimum):
-- NotConfigured
-- Offline
-- ReadyToControl
-- StartControl
-- InControl
-- EndControl
-- Error
-
-Server must enforce:
-- Control clients can write `reqState` etc only when appropriate (practical enforcement rules below).
-
-## 5) Permissions (Mandatory)
-
-Enforce based on `ApplicationType`:
-
-| Action | Provider | Consumer | Control |
-| --- | --- | --- | --- |
-| ReadMeta | ✅ | ✅ | ✅ |
-| Subscribe | ✅ | ✅ | ✅ |
-| Receive UpdateState/NotifyEvent | ✅ | ✅ | ✅ |
-| Send NotifyEvent (Detector events) | ✅ | ❌ | ❌ |
-| Write Detector.state | ✅ | ❌ | ❌ |
-| Write Output.reqState | ❌ | ❌ | ✅ |
-
-On violation:
-- Return JSON-RPC error `-32010` “Permission denied”
-- Additionally, if implementing TLC-FI SessionEvent codes, emit a SessionEvent consistent with “incorrect application type”.
-
-## 6) TLC-FI Methods (Implemented)
-
-### 6.1 ReadMeta
-- Return META fields for requested object type and IDs.
-
-### 6.2 Subscribe
-- Params include object reference `{ type, ids }`
-- Replace any existing subscription for that object type (per TLC-FI)
-- Return initial “complete object” state **without META**
-
-### 6.3 UpdateState
-- Used by:
-  - ITS-A to write writeable attributes only (e.g., Output.reqState)
-  - Facilities to publish readable attributes only
-- Support atomic updates: multiple objects updated in one group must be applied all-or-nothing.
-
-### 6.4 NotifyEvent
-- Used to notify event objects (e.g., DetectorEvent)
-- Event is volatile: delivered once, not tracked as normal state.
-
-## 7) Objects Implemented (Minimum for your use)
-
-### 7.1 Detector (Type = 4)
-
-**META:**
-- `id` (string) — editable in UI (default `DET{Index}`)
-- `generatesEvents` (bool)
-
-**STATE:**
-- `state` (0/1)
-- `faultstate` (enum int)
-- `swico` (enum int)
-- `stateticks` (long)
-
-### 7.2 Output (Type = 6)
-
-**META:**
-- `id` (string) — editable in UI (default `OUT{Index}`)
-
-**STATE:**
-- `state` (nullable int allowed)
-- `faultstate` (int)
-- `reqState` (nullable int) — writeable by Control
-
-Note: Include “exclusive vs non-exclusive” flag as metadata (enhancement) even if you don’t fully simulate both.
-
-### 7.3 Session (Type = 0)
-
-Maintain session objects for:
-- ControlApplication
-- ProviderApplication
-- ConsumerApplication
-
-At minimum:
-- `sessionid`
-- `type` (ApplicationType)
-- For Control:
-  - `reqIntersection`, `reqControlState`, `controlState`, etc.
-
-## 8) Defaults and Naming Rules
-
-### 8.1 Defaults
-- Detectors: 255 default
-- Outputs: 255 default
-- Names:
-  - `DET1..DET255`
-  - `OUT1..OUT255`
-
-### 8.2 Editing
-
-UI must allow editing:
-- Index
-- Name/ID
-- All state fields relevant
-
-And must validate:
-- Index 1..255
-- Unique name per list
-- Unique index per list
-
-## 9) WinForms UI Requirements (All features included)
-
-### 9.1 Top Panel (Connection & Identity)
-- Mode: Server / Client
-- Host (client)
-- Port (default 11501)
-- Auth Mode dropdown:
-  - “TLS (mTLS)”
-  - “Username/Password”
-- TLS inputs (enabled only in TLS mode):
-  - Server PFX path + password (server mode)
-  - Client PFX path + password (client mode)
-  - “Require client certificate” checkbox (server mode)
-  - “Allow self-signed server cert” checkbox (client mode)
-- Username / Password fields (enabled only in password mode)
-- ApplicationType dropdown (Consumer/Provider/Control, mapped to 0/1/2)
-- Version numeric input (default 1)
-- Revision numeric input (default 0)
-- URI textbox (default `127.0.0.1` or local endpoint)
-- Start/Stop or Connect/Disconnect button
-- Status indicators:
-  - server running / client connected
-  - authenticated (Yes/No)
-  - sessionId
-  - client count (server mode)
-
-### 9.2 Tabs (Left)
-
-**A) Detectors (DataGridView)**
-- Index, Name, generatesEvents, state, faultstate, swico, stateticks, notes
-- Buttons: Toggle, Set Occupied/Unoccupied, Pulse, Random generator
-
-**B) Outputs (DataGridView)**
-- Index, Name, state, reqState, faultstate, stateticks, notes
-- Buttons: Apply Req→State (server sim), Clear Req, Bulk set
-
-**C) Intersections (Enhancement)**
-- Support multiple intersections as separate object groups
-- Assign detectors/outputs to intersection(s)
-
-**D) Control (Only when ApplicationType=Control)**
-- ControlState display + ReqControlState selection
-- Buttons to request StartControl / EndControl / ReadyToControl
-- “Atomic Update builder” UI to build one UpdateState with multiple objects
-
-**E) Scripts / Scenarios (Enhancement)**
-- JSON-defined scenario runner:
-  - set detector state
-  - set output reqState
-  - wait
-  - loop
-- Start/Stop
-- Save/load scripts
-
-### 9.3 Right Side (Debug)
-- Log console with timestamps
-- Message Trace table: time, dir, method, bytes, summary
-- Raw JSON send textbox + Send button
-- Pretty-print and Validate JSON buttons
-- Export trace to JSON file
-- Replay trace (offline) feature
-
-## 10) Server Implementation Details
-
-### 10.1 Connection pipeline
-
-On accept:
-1. Establish transport:
-   - If TLS mode: wrap socket stream in `SslStream` and authenticate as server
-   - Else: plain `NetworkStream`
-2. Perform authentication:
-   - TLS mode: validate client certificate (if required)
-   - Password mode: require `Register` JSON-RPC before any TLC-FI method
-3. Create server-side `ClientSession`
-4. Allow TLC-FI method processing
-
-### 10.2 Multi-client
-- Maintain concurrent dictionary of sessions
-- Each session has subscriptions per object type
-- Broadcast UpdateState only to matching subscriptions
-
-### 10.3 Tick service
-- Global ticks counter at 100ms configurable
-- `stateticks` updated per object on state change
-
-### 10.4 Heartbeat & reconnect guidance
-- Implement Heartbeat notification or method
-- Track last-seen time per client
-- Disconnect idle or heartbeat-failed client after timeout
-- Client uses exponential backoff reconnect (enhancement)
-
-## 11) Client Implementation Details
-
-### 11.1 Connection pipeline
-1. Connect TCP
-2. If TLS: `SslStream.AuthenticateAsClient`
-3. If password: send `Register`
-4. After authenticated:
-   - Optionally send ReadMeta + Subscribe-all (toggles)
-5. Handle incoming UpdateState/NotifyEvent and update UI
-
-### 11.2 Control writes
-
-When user edits `reqState`:
-- Send UpdateState with writeable attributes only
-- Mark row “pending” until echoed back (enhancement)
-
-## 12) Persistence Files (Required)
-
-Create these next to the EXE (or in AppData):
-
-### 12.1 `config.json`
-- detectors, outputs, intersections
-- sim settings
-- UI preferences
-
-### 12.2 `users.json`
-
-Must include “Jason” entry.
-Do not log or hardcode the real password in code. Store it in file.
-
-Example:
+Server sends notifications (no `id`):
 
 ```json
 {
-  "users": [
-    { "username": "Jason", "password": "<set_me>", "allowedTypes": [2] },
-    { "username": "admin", "password": "<set_me>", "allowedTypes": [0, 1, 2] }
-  ]
+  "jsonrpc":"2.0",
+  "method":"UpdateState",
+  "params":{
+    "ticks":81881100,
+    "update":[
+      {
+        "objects":{"type":6,"ids":["UTC_O2","UTC_O3"]},
+        "states":[{"state":0},{"state":0}]
+      }
+    ]
+  }
 }
 ```
 
-Enhancement: support hashed passwords with per-user salt (toggle).
+Rules:
 
-### 12.3 `profiles.json`
+- `params.update[]` is a list of update groups
+- Each group:
+  - `objects{type, ids[]}`
+  - `states[]` aligned to ids
 
-Saved connection profiles:
-- host, port
-- auth mode
-- cert paths
-- username
-- app type
-- autosubscribe options
+**Ticks/stateticks can exceed signed 32-bit** (trace shows ~4294727386).
+=> store `ticks` and `stateticks` as `ulong` or `long`.
 
-### 12.4 `/scripts/*.json`
+---
 
-Scenario scripts.
+## 9) State Shapes per Type (based on trace)
 
-## 13) Enhancements (Must include)
+When rendering grids, interpret state payloads like:
 
-- Search/filter grids
-- Bulk edit dialog (ranges and selections)
-- Copy/paste grid blocks
-- Client list in server mode with:
-  - username/cert subject
-  - app type
-  - subscriptions
-  - kick/disconnect
-- Trace export and replay
-- Auto-reconnect with exponential backoff
-- Heartbeat monitoring
-- Robust error handling (never crash UI)
+- Type 2 (Intersection) subscribe/update:
+  - `{state, stateticks, tlcOverrule}`
+- Type 3 (SignalGroup):
+  - `{state, stateticks, predictions:[], dynLF}`
+- Type 4 (Detector):
+  - `{state, faultstate, swico, stateticks}`
+- Type 5 (Input):
+  - `{state, faultstate, swico, stateticks}` (same shape seen)
+- Type 6 (Output):
+  - `{state, faultstate, stateticks}` (and optionally `reqState` for Control use)
+- Type 8 (Variable):
+  - `{value, lifetime}`
+- Type 7 (SpecialVehicleEvents):
+  - `{faultstate}`
 
-## 14) Code Structure (Required)
+Implementation tip:
 
-- `Models/*` (Detector, Output, Intersection, Session, enums)
-- `Core/*` (StateStore, TickService, Validation, Persistence)
-- `Transport/*` (NdjsonFramer, StreamReadLoop, StreamWriteQueue)
-- `Auth/*`
-  - `TlsAuth.cs` (cert validation)
-  - `PasswordAuth.cs` (users.json)
-  - `RegistrationHandler.cs` (Register handler)
-- `JsonRpc/*` (dispatcher, message types, errors)
-- `Server/*` (ServerHost, ClientConnection, SubscriptionManager)
-- `Client/*` (ClientHost, AutoReconnect, Protocol helpers)
-- `UI/*` (MainForm + dialogs)
-- `Logging/*` (UiLogger, FileLogger)
+- Keep a generic “latest state JSON” per object ID and show it even if not parsed.
 
-## 15) Testing Checklist (Codex must implement)
+---
 
-- Start server (TLS off) → connect 2 clients with password auth
-- Verify wrong password rejected and logged
-- Verify Consumer cannot write reqState
-- Verify Control can write reqState and server echoes state
-- Verify subscriptions isolate updates (client sees only subscribed objects)
-- Verify NDJSON frame handling (partial/multi frames)
-- Verify TLS mode works with self-signed certs in test profile
+## 10) Permission Rules
 
-## 16) Notes for tomorrow’s “exact implementation”
+Use `Register.params.type`:
 
-Because vendor implementations vary, this tool must be pluggable:
-- Auth mode is configurable per profile
-- Password auth supports:
-- Register method (JSON-RPC)
-  - Optional “pre-RPC handshake line” (easy to add later)
-- TLS supports:
-  - require client cert ON/OFF
-  - thumbprint allow list
-  - allow self-signed ON/OFF
+- `0 Consumer`: read-only (ReadMeta/Subscribe allowed; no writes)
+- `1 Provider`: can publish detector/events in simulator; in client mode, still allow sending but expect server may reject
+- `2 Control`: may write Output request attributes (if/when implemented)
 
-So tomorrow, when you find out “how it’s exactly implemented”, you’ll likely only need to tweak:
-- whether they use mTLS only
-- whether they have a JSON-RPC login method name/shape
-- whether token is required in each message
+Server mode must enforce:
+
+- not registered → reject
+- consumer cannot write
+- control can write only permitted fields
+
+Return JSON-RPC errors on violations.
+
+---
+
+## 11) WinForms UI Requirements
+
+### 11.1 Top connection bar
+
+- Mode: Server / Client
+- Host (client)
+- Port (default 11501)
+- Username / Password
+- Type dropdown:
+  - Consumer (0)
+  - Provider (1)
+  - Control (2)
+- Version inputs:
+  - Major default 1
+  - Minor default 1
+  - Revision default 0
+- URI textbox (can be empty)
+- Start/Stop or Connect/Disconnect
+- Status display:
+  - Registered / not
+  - sessionid
+  - facilities ids
+  - last ticks
+  - server client count
+
+### 11.2 Object Explorer (Discovery)
+
+TreeView built from Facilities meta (type 1):
+
+- Facilities ID
+  - Intersection(s)
+    - SignalGroups
+    - Detectors
+    - Inputs
+    - Outputs
+    - Variables
+  - SpecialVehicleEvents
+- Session
+
+### 11.3 Tabs per object type
+
+Tabs: Session(0), Facilities(1), Intersection(2), SignalGroup(3), Detector(4), Input(5), Output(6), SpVeh(7), Variables(8)
+
+Each tab:
+
+- Meta grid (key/value) + raw JSON viewer
+- State grid (DataGridView) + raw JSON for selected
+- Search/filter textbox
+
+### 11.4 Simulator Config tab (Server mode)
+
+- Generate defaults:
+  - DET1..DET255
+  - OUT1..OUT255
+- Editable columns:
+  - Index, Name/ID, all relevant state fields
+- Buttons:
+  - Toggle detectors
+  - Apply output state changes
+  - Random pulses
+  - Bulk set ranges
+- Save/load `config.json`
+
+### 11.5 Debug panel (right side)
+
+- Timestamped log
+- Tx/Rx message list (time, dir, method, id, bytes)
+- Raw JSON send box:
+  - send to server (client mode)
+  - broadcast to all clients (server mode)
+- Pretty format + validate JSON
+- Export trace (NDJSON or JSON array)
+
+---
+
+## 12) Client Workflow (Auto-discover + auto-subscribe)
+
+On Connect:
+
+1. TCP connect
+2. Send Register
+3. On success store `sessionid`, `facilities.ids[]`
+4. Auto discovery sequence (toggle):
+   - ReadMeta type 1 for facilities id
+   - ReadMeta type 0 for sessionid
+   - ReadMeta types 2..8 based on lists in facilities meta
+5. Auto subscribe sequence (toggle):
+   - Subscribe type 0,2,3,4,5,6,8,7 (order like trace is fine)
+6. Start listen loop for UpdateState notifications and update UI live
+
+---
+
+## 13) Server Workflow (Simulator)
+
+- Accept multiple clients concurrently
+- Require Register first
+- Validate users via `users.json` (must include Jason)
+- Respond with Register success result including:
+  - sessionid (generate `SIM_SESSION_<n>`)
+  - facilities ids (default `SIM_FAC_1`)
+  - version echo
+- Support ReadMeta/Subscribe for types 0..8
+- Emit UpdateState notifications to subscribed clients:
+  - tick counter increments
+  - stateticks updated on change
+
+---
+
+## 14) Persistence Files
+
+- `users.json` (must include Jason user)
+- `profiles.json` (connection presets)
+- `config.json` (simulator objects and settings)
+- `traces/` exported logs
+
+---
+
+## 15) Key Implementation Gotchas (MANDATORY)
+
+1. Use `ulong` (or `long`) for ticks/stateticks (values exceed int32).
+2. JSON-RPC id may be string; handle generically.
+3. NDJSON framing must handle split/multiple frames robustly.
+4. Support type 8 variables (`value/lifetime`) separately from normal state objects.
+5. Meta and ids arrays can be very large; UI must stay responsive (async + UI invoke, virtual mode grid or paging recommended).

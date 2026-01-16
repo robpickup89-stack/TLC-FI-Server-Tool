@@ -27,16 +27,15 @@ public sealed class Persistence
 
     public async Task<StateStore> LoadConfigAsync(string path)
     {
+        var store = new StateStore();
         if (!File.Exists(path))
         {
-            var store = new StateStore();
             store.SeedDefaults(255, 255);
             return store;
         }
 
         await using var stream = File.OpenRead(path);
         var payload = await JsonSerializer.DeserializeAsync<ConfigPayload>(stream, _options) ?? new ConfigPayload();
-        var store = new StateStore();
         store.Detectors.AddRange(payload.Detectors);
         store.Outputs.AddRange(payload.Outputs);
         store.Intersections.AddRange(payload.Intersections);

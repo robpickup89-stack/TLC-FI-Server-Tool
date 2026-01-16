@@ -1,0 +1,10 @@
+{
+  "name": "PulseDetectors",
+  "actions": [
+    {"setDetector": {"id": "DET1", "state": 1}},
+    {"wait": 500},
+    {"setDetector": {"id": "DET1", "state": 0}},
+    {"randomPulse": {"ids": ["DET1", "DET2"], "rate": 0.5, "pulseMs": 200}},
+    {"loop": 3}
+  ]
+}

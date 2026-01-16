@@ -1,0 +1,30 @@
+{
+  "facilitiesId": "SIM_FAC_1",
+  "sessionIdTemplate": "SIM_SESSION_{0}",
+  "detectors": [
+    {"id": "DET1", "index": 1},
+    {"id": "DET2", "index": 2}
+  ],
+  "outputs": [
+    {"id": "OUT1", "index": 1},
+    {"id": "OUT2", "index": 2}
+  ],
+  "inputs": [
+    {"id": "IN1", "index": 1}
+  ],
+  "variables": [
+    {"id": "VAR1", "index": 1}
+  ],
+  "signalGroups": [
+    {"id": "A", "index": 1}
+  ],
+  "intersections": [
+    {"id": "SIM_INT_1", "index": 1}
+  ],
+  "spVehGeneratorId": "SpecialVehicleEvents",
+  "stateOverrides": {},
+  "settings": {
+    "updateIntervalMs": 250,
+    "tickStart": 81870000
+  }
+}

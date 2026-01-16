@@ -1,6 +1,0 @@
-{
-  "users": [
-    { "username": "Jason", "password": "<set_me>", "allowedTypes": ["Control"] },
-    { "username": "admin", "password": "<set_me>", "allowedTypes": ["Provider", "Consumer", "Control"] }
-  ]
-}

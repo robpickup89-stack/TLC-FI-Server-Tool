@@ -1,8 +1,0 @@
-{
-  "name": "Sample Detector Pulse",
-  "steps": [
-    { "action": "setDetector", "id": "DET1", "state": 1 },
-    { "action": "wait", "milliseconds": 500 },
-    { "action": "setDetector", "id": "DET1", "state": 0 }
-  ]
-}

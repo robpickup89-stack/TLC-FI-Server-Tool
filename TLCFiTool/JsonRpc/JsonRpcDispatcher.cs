@@ -4,9 +4,9 @@ namespace TLCFiTool.JsonRpc;
 
 public sealed class JsonRpcDispatcher
 {
-    private readonly Dictionary<string, Func<JsonElement?, Task<JsonRpcMessage>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<JsonRpcMessage, Task<JsonRpcMessage>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Register(string method, Func<JsonElement?, Task<JsonRpcMessage>> handler)
+    public void Register(string method, Func<JsonRpcMessage, Task<JsonRpcMessage>> handler)
     {
         _handlers[method] = handler;
     }
@@ -24,7 +24,7 @@ public sealed class JsonRpcDispatcher
 
         if (_handlers.TryGetValue(request.Method, out var handler))
         {
-            return await handler(request.Params as JsonElement?);
+            return await handler(request);
         }
 
         return new JsonRpcMessage

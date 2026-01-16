@@ -35,7 +35,7 @@ public sealed class MainForm : Form
         var panel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 150,
+            Height = 190,
             Padding = new Padding(10),
         };
 
@@ -43,7 +43,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 6,
-            RowCount = 3,
+            RowCount = 4,
         };
 
         for (var i = 0; i < layout.ColumnCount; i++)
@@ -53,12 +53,13 @@ public sealed class MainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
 
         layout.Controls.Add(CreateLabeledCombo("Mode", new[] { "Server", "Client" }), 0, 0);
         layout.Controls.Add(CreateLabeledText("Host", "localhost"), 1, 0);
         layout.Controls.Add(CreateLabeledNumeric("Port", 11501, 1, 65535), 2, 0);
         layout.Controls.Add(CreateLabeledCombo("Auth Mode", new[] { "TLS (mTLS)", "Username/Password" }), 3, 0);
-        layout.Controls.Add(CreateLabeledCombo("App Type", new[] { "Provider", "Consumer", "Control" }), 4, 0);
+        layout.Controls.Add(CreateLabeledCombo("App Type", new[] { "Consumer (0)", "Provider (1)", "Control (2)" }), 4, 0);
         layout.Controls.Add(CreateLabeledButton("Start / Connect"), 5, 0);
 
         layout.Controls.Add(CreateLabeledText("Server PFX", ""), 0, 1);
@@ -70,7 +71,12 @@ public sealed class MainForm : Form
 
         layout.Controls.Add(CreateLabeledText("Username", ""), 0, 2);
         layout.Controls.Add(CreateLabeledText("Password", ""), 1, 2);
-        layout.Controls.Add(CreateStatusPanel(), 2, 2);
+        layout.Controls.Add(CreateLabeledNumeric("Version", 1, 0, 9999), 2, 2);
+        layout.Controls.Add(CreateLabeledNumeric("Revision", 0, 0, 9999), 3, 2);
+        layout.Controls.Add(CreateLabeledText("URI", "127.0.0.1"), 4, 2);
+        var statusPanel = CreateStatusPanel();
+        layout.Controls.Add(statusPanel, 0, 3);
+        layout.SetColumnSpan(statusPanel, 6);
 
         panel.Controls.Add(layout);
         return panel;

@@ -2,7 +2,7 @@ namespace TLCFiTool.Models;
 
 public enum ApplicationType
 {
-    Provider,
-    Consumer,
-    Control,
+    Consumer = 0,
+    Provider = 1,
+    Control = 2,
 }
